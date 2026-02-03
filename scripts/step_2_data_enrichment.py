@@ -3,7 +3,7 @@
 Step 2: Training Data Enrichment
 
 Combine multiple data sources and apply augmentation:
-1. Phase 2 questions with generated answers (Category A: GBDT, B: Rule, C: from file)
+1. tagged question data (Category A: GBDT, B: Rule, C: from Qwen3-32B inference)
 2. phase_1_test.csv + ground truth labels
 3. train.csv original training data
 4. Apply shuffle + replace_label augmentation
@@ -57,21 +57,23 @@ def load_jsonl(path: Path) -> list:
     return records
 
 
-def generate_phase2_answers(phase2_path: Path, train_path: Path, phase1_test_path: Path, 
-                            phase1_truth_path: Path, category_c_answers: dict) -> list:
-    """Generate answers for Phase 2 questions using GBDT (A), Rule (B), or pre-computed (C).
+def generate_answer_tags(phase2_path: Path, train_path: Path, phase1_test_path: Path, 
+                          phase1_truth_path: Path, category_c_answers: dict) -> list:
+    """Generate data tags for training using GBDT (A), Rule (B), or pre-computed (C).
     
-    Returns list of records with answers.
+    Returns list of records with tags.
     """
     if not HAS_CLASSIFIER:
         print("    [!] Classifier not available, skipping on-the-fly generation")
         return []
     
     import pandas as pd
+    import sys
     
     # Load training data for GBDT
-    print("    Training GBDT classifier for Category A...")
+    print("    [a] Loading training data...")
     train_df = pd.read_csv(train_path)
+    print(f"        Loaded {len(train_df)} train samples")
     
     # Load phase1 with truth for training
     phase1_truth = pd.read_csv(phase1_truth_path)
@@ -87,45 +89,55 @@ def generate_phase2_answers(phase2_path: Path, train_path: Path, phase1_test_pat
     phase1_df = pd.read_csv(phase1_test_path)
     phase1_df['answer'] = phase1_df['ID'].map(truth_dict)
     phase1_df = phase1_df.dropna(subset=['answer'])
+    print(f"        Loaded {len(phase1_df)} phase1 samples with answers")
     
     # Train classifier
+    print("    [b] Training GBDT classifier (extracting features)...")
     classifier = CategoryAClassifier()
     classifier.train(train_df, phase1_df)
-    print("    GBDT classifier trained")
+    print("        GBDT classifier trained ✓")
     
     # Process Phase 2 questions
+    print("    [c] Tagging data samples...")
     records = []
     with open(phase2_path, 'r', encoding='utf-8') as f:
-        reader = csv.DictReader(f)
-        for row in reader:
-            qid = row['ID']
-            question = row['question']
-            
-            # Determine category and get answer
-            if is_5g_600mbps(question):
-                answer = classifier.predict(question)
-                source = 'category_a'
-            elif is_5g_100mbps(question):
-                answer = generate_category_b_answer(question)
-                source = 'category_b'
-            elif qid in category_c_answers:
-                answer = category_c_answers[qid]
-                source = 'category_c'
-            else:
-                continue  # Skip if no answer available
-            
-            records.append({
-                'id': qid,
-                'source': source,
-                'input': [
-                    {'role': 'system', 'content': SYSTEM_PROMPT},
-                    {'role': 'user', 'content': question}
-                ],
-                'output': [
-                    {'role': 'assistant', 'content': f"\\boxed{{{answer}}}"}
-                ]
-            })
+        questions = list(csv.DictReader(f))
     
+    total = len(questions)
+    for i, row in enumerate(questions):
+        if (i + 1) % 100 == 0 or i == 0:
+            print(f"        Processing: {i+1}/{total}", end='\r')
+            sys.stdout.flush()
+        
+        qid = row['ID']
+        question = row['question']
+        
+        # Determine category and get answer
+        if is_5g_600mbps(question):
+            answer = classifier.predict(question)
+            source = 'category_a'
+        elif is_5g_100mbps(question):
+            answer = generate_category_b_answer(question)
+            source = 'category_b'
+        elif qid in category_c_answers:
+            answer = category_c_answers[qid]
+            source = 'category_c'
+        else:
+            continue  # Skip if no answer available
+        
+        records.append({
+            'id': qid,
+            'source': source,
+            'input': [
+                {'role': 'system', 'content': SYSTEM_PROMPT},
+                {'role': 'user', 'content': question}
+            ],
+            'output': [
+                {'role': 'assistant', 'content': f"\\boxed{{{answer}}}"}
+            ]
+        })
+    
+    print(f"        Processing: {total}/{total} ✓")
     return records
 
 
@@ -494,8 +506,9 @@ def main():
                 if row['answer']:
                     c_answers[row['ID']] = row['answer']
     
-    # 1. Generate Phase 2 answers using GBDT (A), Rule (B), pre-computed (C)
-    print(f"\n[1] Generating Phase 2 answers...")
+    print(f"\n[1] Generating for tagged Questions...")
+    print("    Making statistical analysis and machine learning to generate data tags,")
+    print("    please wait for a few minutes...")
     
     if not HAS_CLASSIFIER:
         print("    ERROR: category_ab_classifier module not available!")
@@ -503,14 +516,14 @@ def main():
         return 1
     
     print("    Training GBDT classifier for Category A...")
-    tagged_records = generate_phase2_answers(
+    tagged_records = generate_answer_tags(
         script_dir / args.phase2_test,
         script_dir / args.train_csv,
         script_dir / args.phase1_test,
         script_dir / args.phase1_truth,
         c_answers
     )
-    print(f"    Phase 2 (A+B+C): {len(tagged_records)} samples generated")
+    print(f"    Tagged (A+B+C): {len(tagged_records)} samples")
     
     # 3. Load Phase 1 with truth
     phase1_records = load_phase1_with_truth(

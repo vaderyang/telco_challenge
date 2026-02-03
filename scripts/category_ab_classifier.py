@@ -262,6 +262,8 @@ class CategoryAClassifier:
         
         Uses 50/50 split on phase1 for train/validation to avoid overfitting.
         """
+        import sys
+        
         # Filter 600Mbps questions from train
         train_600 = train_df[train_df['question'].apply(is_5g_600mbps)].reset_index(drop=True)
         
@@ -279,8 +281,16 @@ class CategoryAClassifier:
         if len(combined) == 0:
             return False
         
-        # Extract features
-        train_feats = [parse_question_features(q) for q in combined['question']]
+        # Extract features with progress
+        print(f"        Extracting features from {len(combined)} samples...")
+        train_feats = []
+        for i, q in enumerate(combined['question']):
+            if (i + 1) % 100 == 0 or i == 0:
+                print(f"        Features: {i+1}/{len(combined)}", end='\r')
+                sys.stdout.flush()
+            train_feats.append(parse_question_features(q))
+        print(f"        Features: {len(combined)}/{len(combined)} ✓")
+        
         X_train = pd.DataFrame(train_feats).fillna(0)
         self.feature_cols = sorted(X_train.columns)
         
@@ -288,6 +298,7 @@ class CategoryAClassifier:
         y_train = self.le.fit_transform(combined['answer'].values)
         
         # Train classifier
+        print("        Fitting GBDT model...")
         self.clf = HistGradientBoostingClassifier(
             max_iter=500, max_depth=12, learning_rate=0.05, random_state=42
         )
