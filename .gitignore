@@ -1,0 +1,17 @@
+# Ignore data files but keep directory structure
+data/*
+!data/.gitkeep
+adapter/*
+# Ignore submission files but keep directory structure
+submissions/*
+!submissions/.gitkeep
+
+# Ignore result files but keep directory structure
+results/*
+!results/.gitkeep
+
+# Python
+__pycache__/
+*.py[cod]
+*.egg-info/
+.eggs/
