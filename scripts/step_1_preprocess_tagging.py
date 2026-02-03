@@ -1,17 +1,4 @@
 #!/usr/bin/env python3
-"""
-Step 1: Preprocessing & Tagging
-
-Classify phase_2_test.csv questions into categories (in memory):
-- Category A (600Mbps): 5G throughput below 600Mbps questions (ML/Rule tagged)
-- Category B (100Mbps): 5G throughput below 100Mbps questions
-- Category C (non-5G): All other questions (math, history, etc.)
-
-Output: tagged_question_answer.jsonl (for enhanced training data enrichment)
-
-Usage:
-    python3 step_1_preprocess_tagging.py [--input INPUT] [--output OUTPUT]
-"""
 
 import argparse
 import csv
@@ -22,11 +9,6 @@ from pathlib import Path
 
 def classify_question(question: str) -> str:
     """Classify a question into category A, B, or C.
-    
-    Returns:
-        'A' for 600Mbps 5G questions
-        'B' for 100Mbps 5G questions
-        'C' for non-5G/other questions
     """
     q_lower = question.lower()
     
@@ -45,11 +27,6 @@ def classify_question(question: str) -> str:
 
 
 def load_phase2_with_categories(input_path: Path) -> dict:
-    """Load phase_2_test.csv and classify questions in memory.
-    
-    Returns:
-        dict with keys 'A', 'B', 'C' containing lists of question dicts
-    """
     rows_by_category = {'A': [], 'B': [], 'C': []}
     
     with open(input_path, 'r', encoding='utf-8') as f:
@@ -107,13 +84,6 @@ def main():
     else:
         print(f"\n[3] No tagged data yet. Use inference to generate tagged_question_answer.jsonl")
     
-    # Summary
-    print(f"\n{'=' * 70}")
-    print("SUMMARY")
-    print(f"{'=' * 70}")
-    print(f"Category A (600Mbps 5G): {len(rows_by_category['A'])} questions")
-    print(f"Category B (100Mbps 5G): {len(rows_by_category['B'])} questions")
-    print(f"Category C (Non-5G/Other): {len(rows_by_category['C'])} questions")
     print(f"Total: {total} questions")
     print(f"{'=' * 70}")
     

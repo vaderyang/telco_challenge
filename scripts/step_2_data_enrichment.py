@@ -1,7 +1,5 @@
 #!/usr/bin/env python3
 """
-Step 2: Training Data Enrichment
-
 Combine multiple data sources and apply augmentation:
 1. tagged_question_answer.jsonl (synthetic predictions from step 1)
 2. phase_1_test.csv + ground truth labels

@@ -1,7 +1,5 @@
 #!/usr/bin/env python3
 """
-Step 3: Training Data Verification
-
 Verify training data quality:
 1. No Phase 2 question leakage into training set
 2. No Phase 1 question leakage (or report if expected)
