@@ -15,15 +15,15 @@ def classify_question(question: str) -> str:
     # Check for 600Mbps 5G pattern (Category A)
     if '600mbps' in q_lower or '600 mbps' in q_lower:
         if '5g' in q_lower or 'nr' in q_lower or 'gnodeb' in q_lower:
-            return 'A'
+            return 'A' #Category A
     
     # Check for 100Mbps pattern (Category B)
     if '100mbps' in q_lower or '100 mbps' in q_lower:
         if '5g' in q_lower or 'nr' in q_lower or 'gnodeb' in q_lower or 'throughput' in q_lower:
-            return 'B'
+            return 'B' #Category B
     
     # Default: Category C (non-5G / general questions)
-    return 'C'
+    return 'C' #Category C
 
 
 def load_phase2_with_categories(input_path: Path) -> dict:

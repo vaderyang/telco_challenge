@@ -70,14 +70,14 @@ def check_vllm_setup():
         print("""
 To run this script, you need a vLLM server with Qwen3-32B:
 
-Option 1: Docker (recommended)
+Step 1: Docker (recommended)
 --------------------------------
 docker run -d --gpus all --name vllm_32b \\
     -v /root/Qwen3-32B:/model \\
     -p 8001:8000 vllm/vllm-openai:latest \\
     --model /model --max-model-len 16000 --gpu-memory-utilization 0.9
 
-Option 2: Environment Variables
+Step 2: Environment Variables
 --------------------------------
 export VLLM_HOST=http://your-server-ip
 export VLLM_PORT=8001
