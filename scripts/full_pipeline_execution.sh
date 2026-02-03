@@ -152,6 +152,11 @@ if [ "$SKIP_DATA" = false ]; then
     python3 scripts/step_1_preprocess_tagging.py
     
     echo ""
+    echo "[Step 1.5] Generating synthetic Q&A for non-5G questions..."
+    echo "(Requires vLLM with Qwen3-32B - will skip if not available)"
+    python3 scripts/step_1.5_synthetic_question_answer.py || echo "    Skipped - vLLM not available"
+    
+    echo ""
     echo "[Step 2] Generating enriched training dataset..."
     python3 scripts/step_2_data_enrichment.py
     
