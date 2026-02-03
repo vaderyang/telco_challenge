@@ -258,14 +258,23 @@ class CategoryAClassifier:
         self.feature_cols = None
     
     def train(self, train_df: pd.DataFrame, phase1_df: pd.DataFrame = None):
-        """Train on train.csv and optionally phase1 data."""
+        """Train on train.csv and 50% of phase1 data.
+        
+        Uses 50/50 split on phase1 for train/validation to avoid overfitting.
+        """
         # Filter 600Mbps questions from train
         train_600 = train_df[train_df['question'].apply(is_5g_600mbps)].reset_index(drop=True)
         
         combined = train_600.copy()
         if phase1_df is not None and len(phase1_df) > 0:
             phase1_600 = phase1_df[phase1_df['question'].apply(is_5g_600mbps)].reset_index(drop=True)
-            combined = pd.concat([train_600, phase1_600], ignore_index=True)
+            
+            # 50/50 split on phase1 data
+            n = len(phase1_600)
+            phase1_train = phase1_600.iloc[:n//2].reset_index(drop=True)
+            # phase1_val = phase1_600.iloc[n//2:]  # For validation if needed
+            
+            combined = pd.concat([train_600, phase1_train], ignore_index=True)
         
         if len(combined) == 0:
             return False
