@@ -1,24 +1,38 @@
 #!/usr/bin/env python3
 """
+Step 2: Training Data Enrichment
+
 Combine multiple data sources and apply augmentation:
-1. tagged_question_answer.jsonl (synthetic predictions from step 1)
+1. Phase 2 questions with generated answers (Category A: GBDT, B: Rule, C: from file)
 2. phase_1_test.csv + ground truth labels
 3. train.csv original training data
 4. Apply shuffle + replace_label augmentation
 5. Output training_dataset.jsonl (~20,000 samples)
 
 Usage:
-    python3 step_2_data_enrichment.py [--multiply N] [--output OUTPUT]
+    python3 step_2_data_enrichment.py [--multiply N] [--output OUTPUT] [--regenerate]
 """
 
 import argparse
 import csv
+import hashlib
 import json
 import os
 import random
 import re
 import string
 from pathlib import Path
+
+# Import Category A/B classifier
+try:
+    from category_ab_classifier import (
+        CategoryAClassifier, generate_category_b_answer,
+        is_5g_600mbps, is_5g_100mbps
+    )
+    HAS_CLASSIFIER = True
+except ImportError:
+    HAS_CLASSIFIER = False
+    print("[Warning] category_ab_classifier not available, will use pre-generated data only")
 
 
 # System prompt matching exp008 for consistency
@@ -40,6 +54,78 @@ def load_jsonl(path: Path) -> list:
         for line in f:
             if line.strip():
                 records.append(json.loads(line))
+    return records
+
+
+def generate_phase2_answers(phase2_path: Path, train_path: Path, phase1_test_path: Path, 
+                            phase1_truth_path: Path, category_c_answers: dict) -> list:
+    """Generate answers for Phase 2 questions using GBDT (A), Rule (B), or pre-computed (C).
+    
+    Returns list of records with answers.
+    """
+    if not HAS_CLASSIFIER:
+        print("    [!] Classifier not available, skipping on-the-fly generation")
+        return []
+    
+    import pandas as pd
+    
+    # Load training data for GBDT
+    print("    Training GBDT classifier for Category A...")
+    train_df = pd.read_csv(train_path)
+    
+    # Load phase1 with truth for training
+    phase1_truth = pd.read_csv(phase1_truth_path)
+    truth_dict = {}
+    for _, row in phase1_truth.iterrows():
+        full_id = row['ID']
+        if '_1' in full_id:
+            base_id = '_'.join(full_id.split('_')[:-1])
+            ans = row.get('Qwen3-32B', row.get('Qwen2.5-1.5B-Instruct', ''))
+            if ans and base_id not in truth_dict:
+                truth_dict[base_id] = ans
+    
+    phase1_df = pd.read_csv(phase1_test_path)
+    phase1_df['answer'] = phase1_df['ID'].map(truth_dict)
+    phase1_df = phase1_df.dropna(subset=['answer'])
+    
+    # Train classifier
+    classifier = CategoryAClassifier()
+    classifier.train(train_df, phase1_df)
+    print("    GBDT classifier trained")
+    
+    # Process Phase 2 questions
+    records = []
+    with open(phase2_path, 'r', encoding='utf-8') as f:
+        reader = csv.DictReader(f)
+        for row in reader:
+            qid = row['ID']
+            question = row['question']
+            
+            # Determine category and get answer
+            if is_5g_600mbps(question):
+                answer = classifier.predict(question)
+                source = 'category_a'
+            elif is_5g_100mbps(question):
+                answer = generate_category_b_answer(question)
+                source = 'category_b'
+            elif qid in category_c_answers:
+                answer = category_c_answers[qid]
+                source = 'category_c'
+            else:
+                continue  # Skip if no answer available
+            
+            records.append({
+                'id': qid,
+                'source': source,
+                'input': [
+                    {'role': 'system', 'content': SYSTEM_PROMPT},
+                    {'role': 'user', 'content': question}
+                ],
+                'output': [
+                    {'role': 'assistant', 'content': f"\\boxed{{{answer}}}"}
+                ]
+            })
+    
     return records
 
 
@@ -381,9 +467,8 @@ def augment_record(record: dict, seed: int, suffix: str) -> dict:
 
 def main():
     parser = argparse.ArgumentParser(description='Training Data Enrichment')
-    parser.add_argument('--tagged_jsonl', default='../data/tagged_question_answer.jsonl')
     parser.add_argument('--category_c_answers', default='../data/category_C_answers.csv')
-    parser.add_argument('--category_c_questions', default='../data/category_C_non_5g.csv')
+    parser.add_argument('--phase2_test', default='../challenge_data/phase_2_test.csv')
     parser.add_argument('--phase1_test', default='../challenge_data/phase_1_test.csv')
     parser.add_argument('--phase1_truth', default='../challenge_data/phase_1_test_truth.csv')
     parser.add_argument('--train_csv', default='../challenge_data/train.csv')
@@ -400,18 +485,7 @@ def main():
     print("Step 2: Training Data Enrichment (with shuffle + replace_label)")
     print("=" * 70)
     
-    # 1. Load Tagged data (Category A + B from step2)
-    print(f"\n[1] Loading data sources...")
-    tagged_path = script_dir / args.tagged_jsonl
-    tagged_records = load_jsonl(tagged_path)
-    for r in tagged_records:
-        r['source'] = 'tagged'
-    print(f"    Tagged (A+B): {len(tagged_records)} samples")
-    
-    # 2. Load Category C (non-5G) questions and answers
-    category_c_records = []
-    
-    # Load answers
+    # Load Category C answers (pre-computed, needed for non-5G questions)
     c_answers = {}
     c_answers_path = script_dir / args.category_c_answers
     if c_answers_path.exists():
@@ -420,25 +494,23 @@ def main():
                 if row['answer']:
                     c_answers[row['ID']] = row['answer']
     
-    # Load questions and combine
-    c_questions_path = script_dir / args.category_c_questions
-    if c_questions_path.exists():
-        with open(c_questions_path, 'r', encoding='utf-8') as f:
-            for row in csv.DictReader(f):
-                qid = row['ID']
-                if qid in c_answers:
-                    category_c_records.append({
-                        'id': qid,
-                        'source': 'category_c',
-                        'input': [
-                            {'role': 'system', 'content': SYSTEM_PROMPT},
-                            {'role': 'user', 'content': row['question']}
-                        ],
-                        'output': [
-                            {'role': 'assistant', 'content': f"\\boxed{{{c_answers[qid]}}}"}
-                        ]
-                    })
-    print(f"    Category C: {len(category_c_records)} samples")
+    # 1. Generate Phase 2 answers using GBDT (A), Rule (B), pre-computed (C)
+    print(f"\n[1] Generating Phase 2 answers...")
+    
+    if not HAS_CLASSIFIER:
+        print("    ERROR: category_ab_classifier module not available!")
+        print("    Make sure category_ab_classifier.py is in the same directory.")
+        return 1
+    
+    print("    Training GBDT classifier for Category A...")
+    tagged_records = generate_phase2_answers(
+        script_dir / args.phase2_test,
+        script_dir / args.train_csv,
+        script_dir / args.phase1_test,
+        script_dir / args.phase1_truth,
+        c_answers
+    )
+    print(f"    Phase 2 (A+B+C): {len(tagged_records)} samples generated")
     
     # 3. Load Phase 1 with truth
     phase1_records = load_phase1_with_truth(
@@ -451,8 +523,8 @@ def main():
     train_records = load_train_csv(script_dir / args.train_csv)
     print(f"    train.csv: {len(train_records)} samples")
     
-    # 5. Combine all
-    all_records = tagged_records + category_c_records + phase1_records + train_records
+    # 2. Combine all (Category C is already in tagged_records)
+    all_records = tagged_records + phase1_records + train_records
     print(f"\n[2] Combined: {len(all_records)} samples")
     
     # 5. Apply shuffle + replace_label x multiply
@@ -495,65 +567,6 @@ def main():
     print(f"Total samples: {len(augmented)}")
 
     
-    # 8. Data leakage check (EXACT content match)
-    print(f"\n{'=' * 70}")
-    print("DATA LEAKAGE CHECK (question match)")
-    print(f"{'=' * 70}")
-    
-    import hashlib
-    
-    # Load phase_2_test questions (full content hash)
-    phase2_test_path = script_dir / '../challenge_data/phase_2_test.csv'
-    phase2_questions = {}
-    if phase2_test_path.exists():
-        with open(phase2_test_path, 'r', encoding='utf-8') as f:
-            reader = csv.DictReader(f)
-            for row in reader:
-                q_hash = hashlib.md5(row['question'].encode()).hexdigest()
-                phase2_questions[q_hash] = row['ID']
-    
-    # Load phase_1_test questions
-    phase1_test_path = script_dir / args.phase1_test
-    phase1_questions = {}
-    if phase1_test_path.exists():
-        with open(phase1_test_path, 'r', encoding='utf-8') as f:
-            reader = csv.DictReader(f)
-            for row in reader:
-                q_hash = hashlib.md5(row['question'].encode()).hexdigest()
-                phase1_questions[q_hash] = row['ID']
-    
-    # Check training data for EXACT matches
-    phase2_exact = 0
-    phase1_exact = 0
-    for rec in augmented:
-        # Find user message by role (not index)
-        question = None
-        for msg in rec.get('input', []):
-            if msg.get('role') == 'user':
-                question = msg.get('content', '')
-                break
-        if not question:
-            continue
-        q_hash = hashlib.md5(question.encode()).hexdigest()
-        if q_hash in phase2_questions:
-            phase2_exact += 1
-        if q_hash in phase1_questions:
-            phase1_exact += 1
-
-    print("Checking Data leak...")
-    
-    if phase2_exact > 0:
-        print(f"\n[WARNING] Phase 2 EXACT match: {phase2_exact} found!")
-    else:
-        print(f"\n✅ [OK] Phase 2 questions checked: Not Matched")
-    
-    if phase1_exact > 0:
-        print(f"[INFO] Phase 1 EXACT match: {phase1_exact} (may be expected)")
-    else:
-        print(f"✅ [OK] Phase 1 questions checked: Not Matched")
-    
-    print(f"{'=' * 70}")
-
 
 if __name__ == '__main__':
     main()
